@@ -25,7 +25,7 @@ jobs:
           DAILY_EXTRA_HEADERS_JSON: ${{ secrets.DAILY_EXTRA_HEADERS_JSON }}
           DAILY_BODY_JSON:          ${{ secrets.DAILY_BODY_JSON }}
         run: |
-          set +e   # 不让 bash 自动 exit，由我们自己判断结果
+          set +e
           OUTPUT=$(bash ./claim_witchly_daily.sh 2>&1)
           EXIT_CODE=$?
           echo "output<<EOF" >> "$GITHUB_OUTPUT"
@@ -35,12 +35,12 @@ jobs:
           echo "$OUTPUT"
           exit $EXIT_CODE
 
-      # ── 截图：失败时把完整日志上传为 Artifact ───────────────────
-      - name: Save failure log as artifact
+      # ── 失败日志上传为 Artifact ──────────────────────────────────
+      - name: Save failure log
         if: failure()
         run: |
           mkdir -p /tmp/witchly-logs
-          echo "${{ steps.claim.outputs.output }}" > /tmp/witchly-logs/failure.log
+          printf '%s\n' "${{ steps.claim.outputs.output }}" > /tmp/witchly-logs/failure.log
           echo "Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
                >> /tmp/witchly-logs/failure.log
 
@@ -58,62 +58,43 @@ jobs:
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+          CLAIM_OUTPUT: ${{ steps.claim.outputs.output }}
+          RUN_URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          OUTPUT="${{ steps.claim.outputs.output }}"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          MESSAGE="✅ *Witchly 每日签到成功*
-
-📅 时间：$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S') CST
-📋 输出：
-\`\`\`
-${OUTPUT}
-\`\`\`
-🔗 [查看本次运行](${RUN_URL})"
-
+          NOW=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
+          MESSAGE=$(printf '✅ *Witchly 每日签到成功*\n\n📅 时间：%s CST\n📋 输出：\n```\n%s\n```\n🔗 [查看本次运行](%s)' \
+            "$NOW" "$CLAIM_OUTPUT" "$RUN_URL")
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d disable_web_page_preview="true" \
             --data-urlencode "text=${MESSAGE}"
 
-      # ── TG 通知：失败（含日志截图文本） ─────────────────────────
+      # ── TG 通知：失败（含日志文件） ──────────────────────────────
       - name: Notify Telegram (failure)
         if: failure()
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+          CLAIM_OUTPUT: ${{ steps.claim.outputs.output }}
+          EXIT_CODE:    ${{ steps.claim.outputs.exit_code }}
+          RUN_URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          OUTPUT="${{ steps.claim.outputs.output }}"
-          EXIT_CODE="${{ steps.claim.outputs.exit_code }}"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          NOW=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
 
           # 发送文字通知
-          MESSAGE="❌ *Witchly 每日签到失败*
-
-📅 时间：$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S') CST
-💥 退出码：${EXIT_CODE}
-📋 输出：
-\`\`\`
-${OUTPUT}
-\`\`\`
-🔗 [查看完整日志](${RUN_URL})"
-
+          MESSAGE=$(printf '❌ *Witchly 每日签到失败*\n\n📅 时间：%s CST\n💥 退出码：%s\n📋 输出：\n```\n%s\n```\n🔗 [查看完整日志](%s)' \
+            "$NOW" "$EXIT_CODE" "$CLAIM_OUTPUT" "$RUN_URL")
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d disable_web_page_preview="true" \
             --data-urlencode "text=${MESSAGE}"
 
-          # 把日志以文件形式再发一份（类似截图）
+          # 发送日志文件
           LOG_FILE="/tmp/witchly_failure_$(date +%Y%m%d_%H%M%S).log"
-          echo "=== Witchly Daily Failure Log ===" > "$LOG_FILE"
-          echo "Time   : $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S') CST" >> "$LOG_FILE"
-          echo "Exit   : ${EXIT_CODE}" >> "$LOG_FILE"
-          echo "Run URL: ${RUN_URL}" >> "$LOG_FILE"
-          echo "" >> "$LOG_FILE"
-          echo "=== Output ===" >> "$LOG_FILE"
-          echo "${OUTPUT}" >> "$LOG_FILE"
-
+          printf '=== Witchly Daily Failure Log ===\nTime   : %s CST\nExit   : %s\nRun URL: %s\n\n=== Output ===\n%s\n' \
+            "$NOW" "$EXIT_CODE" "$RUN_URL" "$CLAIM_OUTPUT" > "$LOG_FILE"
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
             -F chat_id="${TG_CHAT_ID}" \
             -F caption="⬆️ 完整执行日志" \
