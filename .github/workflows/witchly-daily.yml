@@ -2,7 +2,7 @@ name: Witchly Daily Claim
 
 on:
   schedule:
-    - cron: '10 0 * * *'   # 每天 UTC 00:10（北京时间 08:10）
+    - cron: '10 0,12 * * *'   # 每天 UTC 00:10（北京时间 08:10）
   workflow_dispatch:         # 支持手动触发
 
 jobs:
