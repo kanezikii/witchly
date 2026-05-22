@@ -25,10 +25,9 @@ jobs:
         run: |
           set +e
 
-          # 脚本从文件读取 .env，这里改为直接写环境变量注入
-          # 创建临时 env 文件供脚本 source
-          echo "RENEW_URL=${RENEW_URL}" > .env.witchlyhost
-          echo "RENEW_COOKIE=${RENEW_COOKIE}" >> .env.witchlyhost
+          # 用 printf %q 转义特殊字符，避免 Cookie 被 zsh 当命令执行
+          printf 'RENEW_URL=%q\n' "$RENEW_URL" >  .env.witchlyhost
+          printf 'RENEW_COOKIE=%q\n' "$RENEW_COOKIE" >> .env.witchlyhost
 
           OUTPUT=$(zsh ./renew_witchlyhost.sh 2>&1)
           EXIT_CODE=$?
