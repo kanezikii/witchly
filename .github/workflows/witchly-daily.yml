@@ -2,7 +2,7 @@ name: Witchly Daily Claim
 
 on:
   schedule:
-    - cron: '10 0,12 * * *'   # 每天 UTC 00:10（北京时间 08:10）
+    - cron: '10 0 * * *'   # 每天 UTC 00:10（北京时间 08:10）
   workflow_dispatch:         # 支持手动触发
 
 jobs:
@@ -13,7 +13,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 执行签到脚本，完整捕获输出 ──────────────────────────────
+      # ── 安装 gost ─────────────────────────────────────────────────
+      - name: Install gost
+        run: |
+          GOST_VER="3.0.0-rc10"
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64)  GOST_ARCH="amd64" ;;
+            aarch64) GOST_ARCH="arm64" ;;
+            *)       GOST_ARCH="amd64" ;;
+          esac
+          curl -sSL "https://github.com/go-gost/gost/releases/download/v${GOST_VER}/gost_${GOST_VER}_linux_${GOST_ARCH}.tar.gz" \
+            -o /tmp/gost.tar.gz
+          tar -xzf /tmp/gost.tar.gz -C /tmp
+          chmod +x /tmp/gost
+          sudo mv /tmp/gost /usr/local/bin/gost
+          gost -V
+
+      # ── 执行签到脚本，完整捕获输出 ────────────────────────────────
       - name: Run daily claim
         id: claim
         env:
@@ -24,6 +41,9 @@ jobs:
           DAILY_USER_AGENT:         ${{ secrets.DAILY_USER_AGENT }}
           DAILY_EXTRA_HEADERS_JSON: ${{ secrets.DAILY_EXTRA_HEADERS_JSON }}
           DAILY_BODY_JSON:          ${{ secrets.DAILY_BODY_JSON }}
+          # 代理节点，格式: user:pass@host:port 或 host:port
+          # 多节点用英文逗号分隔（脚本会逐个尝试）
+          PROXY_NODE:               ${{ secrets.WITCHLY_PROXY_NODE }}
         run: |
           set +e
           OUTPUT=$(bash ./claim_witchly_daily.sh 2>&1)
@@ -35,7 +55,7 @@ jobs:
           echo "$OUTPUT"
           exit $EXIT_CODE
 
-      # ── 失败日志上传为 Artifact ──────────────────────────────────
+      # ── 失败日志上传为 Artifact ────────────────────────────────────
       - name: Save failure log
         if: failure()
         run: |
@@ -52,7 +72,7 @@ jobs:
           path: /tmp/witchly-logs/
           retention-days: 7
 
-      # ── TG 通知：成功 ────────────────────────────────────────────
+      # ── TG 通知：成功 ──────────────────────────────────────────────
       - name: Notify Telegram (success)
         if: success()
         env:
@@ -70,7 +90,7 @@ jobs:
             -d disable_web_page_preview="true" \
             --data-urlencode "text=${MESSAGE}"
 
-      # ── TG 通知：失败（含日志文件） ──────────────────────────────
+      # ── TG 通知：失败（含日志文件） ───────────────────────────────
       - name: Notify Telegram (failure)
         if: failure()
         env:
@@ -82,7 +102,6 @@ jobs:
         run: |
           NOW=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
 
-          # 发送文字通知
           MESSAGE=$(printf '❌ *Witchly 每日签到失败*\n\n📅 时间：%s CST\n💥 退出码：%s\n📋 输出：\n```\n%s\n```\n🔗 [查看完整日志](%s)' \
             "$NOW" "$EXIT_CODE" "$CLAIM_OUTPUT" "$RUN_URL")
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
@@ -91,7 +110,6 @@ jobs:
             -d disable_web_page_preview="true" \
             --data-urlencode "text=${MESSAGE}"
 
-          # 发送日志文件
           LOG_FILE="/tmp/witchly_failure_$(date +%Y%m%d_%H%M%S).log"
           printf '=== Witchly Daily Failure Log ===\nTime   : %s CST\nExit   : %s\nRun URL: %s\n\n=== Output ===\n%s\n' \
             "$NOW" "$EXIT_CODE" "$RUN_URL" "$CLAIM_OUTPUT" > "$LOG_FILE"
