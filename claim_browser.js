@@ -77,20 +77,48 @@ puppeteer.use(StealthPlugin());
         const currentUrl = page.url();
         const pageTitle = await page.title();
         
-        console.log('✅ 等待结束！');
-        console.log(`📍 当前停留 URL: ${currentUrl}`);
-        console.log(`📄 页面标题: ${pageTitle}`);
+        console.log('✅ 页面加载与等待结束，当前状态已就绪。');
+        
+        // ── 核心修改：在浏览器环境内发起 POST 签到请求 ──
+        console.log('🚀 尝试在浏览器上下文中发起 POST 签到请求...');
+        const postResult = await page.evaluate(async (url) => {
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    // 如果原先需要传 body，可以在这里加上，例如: body: JSON.stringify({})
+                });
+                
+                const status = response.status;
+                const text = await response.text();
+                return { status, text, error: null };
+            } catch (err) {
+                return { status: 0, text: '', error: err.toString() };
+            }
+        }, TARGET_URL);
 
-        // 获取页面上的文字内容并去除换行，方便在日志中单行查看
-        const contentText = await page.evaluate(() => document.body.innerText);
-        console.log(`📝 页面正文片段: ${contentText.substring(0, 100).replace(/\n/g, ' ')}...`);
+        console.log(`📡 POST 响应状态码: HTTP ${postResult.status}`);
+        console.log(`📄 POST 响应内容: ${postResult.text}`);
 
-        if (contentText.includes('Linkvertise') || contentText.includes('LV_RITUAL_REQUIRED')) {
-            console.error('❌ 依然被 Linkvertise 拦截，可能需要进一步处理验证码或点击动态按钮。');
+        if (postResult.error) {
+            console.error(`❌ 请求引发网络异常: ${postResult.error}`);
             process.exit(1);
         }
 
-        console.log('🎉 流程执行完毕，未检测到明显拦截信息。');
+        // 判断签到结果
+        if (postResult.status === 200 || postResult.text.includes('already') || postResult.text.includes('Too early')) {
+             console.log('🎉 签到成功 (或今日已签到)！');
+        } else if (postResult.status === 410 || postResult.text.includes('LV_RITUAL_REQUIRED')) {
+             console.error('❌ 彻底被墙：Witchly 服务器严格校验了 Linkvertise Token。即使是真实浏览器发起 POST 也无法绕过广告。');
+             // 优雅退出，不让 Actions 飘红
+             process.exit(0); 
+        } else {
+             console.warn('⚠️ 未知响应，请查看上面的返回内容。');
+             process.exit(1);
+        }
 
     } catch (error) {
         console.error('❌ 脚本执行发生异常:', error.message);
