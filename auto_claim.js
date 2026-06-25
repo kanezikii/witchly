@@ -29,7 +29,6 @@ puppeteer.use(StealthPlugin());
         await page.setViewport({ width: 1280, height: 800 });
 
         // ── 拦截垃圾广告弹窗 (Pop-unders) ──
-        // Linkvertise 点击经常会弹出新标签页，这里设置自动关闭所有新开的非必要标签页
         browser.on('targetcreated', async (target) => {
             if (target.type() === 'page') {
                 const newPage = await target.page();
@@ -51,12 +50,14 @@ puppeteer.use(StealthPlugin());
 
         // ── 第一阶段：Witchly 面板操作 ──
         console.log(`🌐 访问 Witchly 面板...`);
+        // 使用 domcontentloaded 避免被无穷无尽的广告资源卡住超时
         await page.goto(DASHBOARD_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
         console.log('⏳ 寻找 [MANIFEST] 按钮...');
-        // 使用 XPath 定位包含 MANIFEST 文本的黄色按钮
-        await page.waitForXPath("//button[contains(@class, 'btn-primary') and contains(translate(., 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 'MANIFEST')]", { visible: true, timeout: 15000 });
-        const manifestBtns = await page.$x("//button[contains(@class, 'btn-primary') and contains(translate(., 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 'MANIFEST')]");
+        // 升级语法：使用 ::-p-xpath 包装器
+        const manifestXPath = "//button[contains(@class, 'btn-primary') and contains(translate(., 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 'MANIFEST')]";
+        await page.waitForSelector(`::-p-xpath(${manifestXPath})`, { visible: true, timeout: 15000 });
+        const manifestBtns = await page.$$(`::-p-xpath(${manifestXPath})`);
         
         if (manifestBtns.length > 0) {
             console.log('🖱️ 点击 [MANIFEST] 按钮');
@@ -66,9 +67,9 @@ puppeteer.use(StealthPlugin());
         }
 
         console.log('⏳ 等待 [CONTINUE] 弹窗...');
-        // 根据截图二，定位黄色 CONTINUE 按钮
-        await page.waitForXPath("//button[contains(@class, 'btn-primary') and contains(., 'CONTINUE')]", { visible: true, timeout: 10000 });
-        const continueBtns = await page.$x("//button[contains(@class, 'btn-primary') and contains(., 'CONTINUE')]");
+        const continueXPath = "//button[contains(@class, 'btn-primary') and contains(., 'CONTINUE')]";
+        await page.waitForSelector(`::-p-xpath(${continueXPath})`, { visible: true, timeout: 10000 });
+        const continueBtns = await page.$$(`::-p-xpath(${continueXPath})`);
         
         console.log('🖱️ 点击 [CONTINUE] 按钮，准备跳转...');
         await Promise.all([
@@ -85,13 +86,12 @@ puppeteer.use(StealthPlugin());
         }
 
         console.log('⏳ 寻找 [Get Link / Free Access] 按钮...');
-        // 尝试寻找 Get Link 或相关的继续按钮
-        await page.waitForTimeout(5000); // 强行等待页面与可能存在的 Cloudflare 盾加载
+        await page.waitForTimeout(5000); 
         
         const getLinkXPath = "//button[contains(., 'Get Link')] | //span[contains(., 'Get Link')] | //div[contains(@class, 'linkvertise-btn')]";
         try {
-            await page.waitForXPath(getLinkXPath, { visible: true, timeout: 15000 });
-            const getLinkBtns = await page.$x(getLinkXPath);
+            await page.waitForSelector(`::-p-xpath(${getLinkXPath})`, { visible: true, timeout: 15000 });
+            const getLinkBtns = await page.$$(`::-p-xpath(${getLinkXPath})`);
             console.log('🖱️ 点击获取链接按钮，进入广告循环...');
             await getLinkBtns[0].click();
         } catch (e) {
@@ -99,27 +99,25 @@ puppeteer.use(StealthPlugin());
         }
 
         // ── 第三阶段：循环处理 3 个广告 ──
-        // 根据截图四，我们需要等待并点击 "Skip Ad" span 标签
         for (let i = 1; i <= 3; i++) {
             console.log(`\n⏳ 开始处理第 ${i} 个广告...`);
             let skipClicked = false;
-            
-            // 轮询等待 Skip Ad 按钮变为可见并点击 (最长等 30 秒)
             const startTime = Date.now();
+            
             while (Date.now() - startTime < 30000) {
                 try {
-                    // 截图四的选择器: span.lv-chip__text.lv-chip__text--white
-                    const skipBtns = await page.$x("//span[contains(@class, 'lv-chip__text') and contains(., 'Skip Ad')]");
+                    const skipXPath = "//span[contains(@class, 'lv-chip__text') and contains(., 'Skip Ad')]";
+                    const skipBtns = await page.$$(`::-p-xpath(${skipXPath})`);
                     if (skipBtns.length > 0) {
-                        // 尝试点击，Linkvertise 的按钮有时会覆盖防点击层，使用 evaluate 直接触发
                         await page.evaluate(el => el.click(), skipBtns[0]);
                         console.log(`✅ 第 ${i} 个广告 [Skip Ad] 点击成功！`);
                         skipClicked = true;
-                        await page.waitForTimeout(3000); // 给页面缓冲时间加载下一个广告
-                        break; // 跳出 while，进行下一次 for 循环
+                        await page.waitForTimeout(3000); 
+                        break; 
                     }
                 } catch (err) {}
-                await page.waitForTimeout(1000); // 每秒检查一次
+                // 修复旧版 page.waitForTimeout 警告，使用 setTimeout
+                await new Promise(r => setTimeout(r, 1000)); 
             }
             
             if (!skipClicked) {
