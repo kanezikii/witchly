@@ -20,7 +20,7 @@ puppeteer.use(StealthPlugin());
             '--disable-setuid-sandbox',
             '--window-size=1280,800',
             '--disable-blink-features=AutomationControlled',
-            '--proxy-server=socks5://127.0.0.1:10808' // 指向 Xray 本地端口
+            '--proxy-server=socks5://127.0.0.1:10808'
         ]
     });
 
@@ -28,7 +28,7 @@ puppeteer.use(StealthPlugin());
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 800 });
 
-        // ── 拦截垃圾广告弹窗 (Pop-unders) ──
+        // ── 拦截垃圾广告弹窗 ──
         browser.on('targetcreated', async (target) => {
             if (target.type() === 'page') {
                 const newPage = await target.page();
@@ -50,30 +50,34 @@ puppeteer.use(StealthPlugin());
 
         // ── 第一阶段：Witchly 面板操作 ──
         console.log(`🌐 访问 Witchly 面板...`);
-        // 使用 domcontentloaded 避免被无穷无尽的广告资源卡住超时
         await page.goto(DASHBOARD_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        
+        // 强行等待 3 秒，确保网页上动态绑定的 JavaScript 事件已经完全生效
+        console.log('⏳ 等待页面脚本加载完全...');
+        await new Promise(r => setTimeout(r, 3000));
 
         console.log('⏳ 寻找 [MANIFEST] 按钮...');
-        // 升级语法：使用 ::-p-xpath 包装器
         const manifestXPath = "//button[contains(@class, 'btn-primary') and contains(translate(., 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 'MANIFEST')]";
         await page.waitForSelector(`::-p-xpath(${manifestXPath})`, { visible: true, timeout: 15000 });
         const manifestBtns = await page.$$(`::-p-xpath(${manifestXPath})`);
         
         if (manifestBtns.length > 0) {
-            console.log('🖱️ 点击 [MANIFEST] 按钮');
-            await manifestBtns[0].click();
+            console.log('🖱️ 强制点击 [MANIFEST] 按钮 (穿透防点击层)');
+            // 使用 evaluate 强制在底层触发点击，无视任何遮挡
+            await page.evaluate(el => el.click(), manifestBtns[0]);
         } else {
             throw new Error('未能找到 MANIFEST 按钮，可能今日已签到。');
         }
 
-        console.log('⏳ 等待 [CONTINUE] 弹窗...');
-        const continueXPath = "//button[contains(@class, 'btn-primary') and contains(., 'CONTINUE')]";
-        await page.waitForSelector(`::-p-xpath(${continueXPath})`, { visible: true, timeout: 10000 });
+        console.log('⏳ 等待 [CONTINUE] 弹窗... (最长等待 30 秒)');
+        // 放宽 CONTINUE 按钮的匹配条件，并延长超时时间至 30s
+        const continueXPath = "//button[contains(translate(., 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 'CONTINUE')]";
+        await page.waitForSelector(`::-p-xpath(${continueXPath})`, { visible: true, timeout: 30000 });
         const continueBtns = await page.$$(`::-p-xpath(${continueXPath})`);
         
-        console.log('🖱️ 点击 [CONTINUE] 按钮，准备跳转...');
+        console.log('🖱️ 强制点击 [CONTINUE] 按钮，准备跳转...');
         await Promise.all([
-            continueBtns[0].click(),
+            page.evaluate(el => el.click(), continueBtns[0]),
             page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 })
         ]);
 
@@ -86,14 +90,14 @@ puppeteer.use(StealthPlugin());
         }
 
         console.log('⏳ 寻找 [Get Link / Free Access] 按钮...');
-        await page.waitForTimeout(5000); 
+        await new Promise(r => setTimeout(r, 5000)); 
         
         const getLinkXPath = "//button[contains(., 'Get Link')] | //span[contains(., 'Get Link')] | //div[contains(@class, 'linkvertise-btn')]";
         try {
             await page.waitForSelector(`::-p-xpath(${getLinkXPath})`, { visible: true, timeout: 15000 });
             const getLinkBtns = await page.$$(`::-p-xpath(${getLinkXPath})`);
             console.log('🖱️ 点击获取链接按钮，进入广告循环...');
-            await getLinkBtns[0].click();
+            await page.evaluate(el => el.click(), getLinkBtns[0]);
         } catch (e) {
             console.log('⚠️ 未找到显式的 Get Link 按钮，尝试直接寻找广告 Skip Ad...');
         }
@@ -112,11 +116,10 @@ puppeteer.use(StealthPlugin());
                         await page.evaluate(el => el.click(), skipBtns[0]);
                         console.log(`✅ 第 ${i} 个广告 [Skip Ad] 点击成功！`);
                         skipClicked = true;
-                        await page.waitForTimeout(3000); 
+                        await new Promise(r => setTimeout(r, 3000)); 
                         break; 
                     }
                 } catch (err) {}
-                // 修复旧版 page.waitForTimeout 警告，使用 setTimeout
                 await new Promise(r => setTimeout(r, 1000)); 
             }
             
@@ -143,6 +146,16 @@ puppeteer.use(StealthPlugin());
 
     } catch (error) {
         console.error('❌ 致命异常:', error.message);
+        
+        // 尝试捕获错误时的截图，保存为 error.png
+        try {
+            const pages = await browser.pages();
+            if (pages.length > 0) {
+                await pages[pages.length - 1].screenshot({ path: 'error.png', fullPage: true });
+                console.log('📸 已保存错误现场截图至 error.png');
+            }
+        } catch(e) {}
+        
         process.exit(1);
     } finally {
         await browser.close();
