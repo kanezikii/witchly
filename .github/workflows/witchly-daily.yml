@@ -21,36 +21,50 @@ jobs:
       - name: Install Browser Dependencies
         run: npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
 
-      # ── 核心变更：安装并启动 Xray 核心加载家宽节点 ──
-      - name: Install and Run Xray Proxy
+      # ── 修复：将代理启动与爬虫运行合并到同一个 Step ──
+      - name: Run Proxy and Puppeteer
+        id: claim
         env:
           XRAY_CONFIG: ${{ secrets.XRAY_CONFIG_JSON }}
+          DAILY_COOKIE: ${{ secrets.DAILY_COOKIE }}
         run: |
           if [ -z "$XRAY_CONFIG" ]; then
-            echo "❌ 未找到 XRAY_CONFIG_JSON 环境变量，代理启动失败！"
+            echo "❌ 未找到 XRAY_CONFIG_JSON，请检查 Secrets 配置！"
             exit 1
           fi
-          echo "🚀 正在下载并配置 Xray 核心..."
+
+          echo "🚀 下载并配置 Xray 核心..."
           curl -sSL -o xray.zip https://github.com/XTLS/Xray-core/releases/download/v1.8.4/Xray-linux-64.zip
           unzip -q xray.zip -d xray-bin
           chmod +x xray-bin/xray
-          
-          # 将 Secret 中的 JSON 写入配置文件
           echo "$XRAY_CONFIG" > config.json
-          
-          echo "🌐 启动 Xray 代理 (映射至本地 10808 端口)..."
-          ./xray-bin/xray run -c config.json &
-          sleep 3 # 等待代理内核启动完毕
 
-      - name: Run daily claim (Puppeteer)
-        id: claim
-        env:
-          DAILY_COOKIE: ${{ secrets.DAILY_COOKIE }}
-        run: |
+          echo "🌐 启动 Xray 代理..."
+          # 将日志输出到 xray.log，并在后台运行
+          ./xray-bin/xray run -c config.json > xray.log 2>&1 &
+          XRAY_PID=$!
+          
+          # 给代理 3 秒钟的启动和握手时间
+          sleep 3
+
+          # 检查 Xray 进程是否存活
+          if ! kill -0 $XRAY_PID 2>/dev/null; then
+            echo "❌ Xray 代理启动失败！请检查 JSON 节点配置格式。日志如下："
+            cat xray.log
+            exit 1
+          fi
+          echo "✅ Xray 代理已稳定运行 (PID: $XRAY_PID)"
+
+          # 运行自动签到脚本
+          echo "🤖 启动浏览器执行任务..."
           set +e
           OUTPUT=$(node auto_claim.js 2>&1)
           EXIT_CODE=$?
           
+          # 脚本执行完毕，清理并关闭 Xray 代理
+          kill $XRAY_PID 2>/dev/null
+
+          # 写入 GitHub Output 供后续 TG 通知使用
           echo "output<<EOF" >> "$GITHUB_OUTPUT"
           echo "$OUTPUT"     >> "$GITHUB_OUTPUT"
           echo "EOF"         >> "$GITHUB_OUTPUT"
