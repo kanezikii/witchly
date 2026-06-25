@@ -25,7 +25,6 @@ puppeteer.use(StealthPlugin());
     });
 
     try {
-        // ── 注意：这里改为 let，因为后续可能需要切换标签页控制权 ──
         let page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 800 });
 
@@ -74,13 +73,12 @@ puppeteer.use(StealthPlugin());
         const continueBtns = await page.$$(`::-p-xpath(${continueXPath})`);
         
         console.log('🖱️ 强制点击 [CONTINUE] 按钮，准备跳转...');
-        // 核心修改：不再死等 waitForNavigation，直接点下去
         await page.evaluate(el => el.click(), continueBtns[0]);
 
         // ── 动态雷达扫描：寻找 Linkvertise 标签页 ──
         console.log('📡 启动多标签页扫描，等待进入 Linkvertise...');
         let foundLinkvertise = false;
-        for (let i = 0; i < 30; i++) { // 最长等 30 秒
+        for (let i = 0; i < 30; i++) { 
             const allPages = await browser.pages();
             for (const p of allPages) {
                 if (p.url().includes('linkvertise')) {
@@ -100,37 +98,54 @@ puppeteer.use(StealthPlugin());
 
         const currentUrl = page.url();
         console.log(`📍 成功锁定 Linkvertise 页面: ${currentUrl}`);
-        
-        // 给予加载时间，让那个麻烦的隐私弹窗弹出来
-        console.log('⏳ 给予页面加载缓冲时间...');
-        await new Promise(r => setTimeout(r, 8000)); 
 
-        // ── 清除隐私/Cookie 弹窗障碍 ──
-        console.log('🔍 检查是否有隐私/Cookie 同意弹窗...');
-        try {
-            const consentXPath = "//button[contains(translate(., 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 'CONFIRM') or contains(translate(., 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 'ACCEPT')]";
-            await page.waitForSelector(`::-p-xpath(${consentXPath})`, { visible: true, timeout: 5000 });
-            const consentBtns = await page.$$(`::-p-xpath(${consentXPath})`);
+        // ── 第二阶段：注入全局弹窗杀手 ──
+        console.log('🛡️ 注入全局隐私弹窗粉碎机 (后台每秒自动扫描清除)...');
+        await page.evaluate(() => {
+            window.popupKiller = setInterval(() => {
+                const elements = Array.from(document.querySelectorAll('button, div, span, a'));
+                const target = elements.find(el => {
+                    if (el.offsetWidth === 0 || el.offsetHeight === 0) return false; // 必须是肉眼可见的
+                    const text = (el.textContent || '').trim().toUpperCase();
+                    return text === 'CONFIRM' || text === 'ACCEPT' || text === 'AGREE';
+                });
+                if (target) {
+                    target.click();
+                    console.log('🤖 拦截并自动粉碎了隐私协议弹窗！');
+                }
+            }, 1000);
+        });
+
+        console.log('⏳ 给予 Linkvertise 页面加载缓冲时间...');
+        await new Promise(r => setTimeout(r, 6000)); 
+
+        // ── 寻找 Get Link 按钮 ──
+        console.log('⏳ 寻找 [Get Link / Free Access] 按钮...');
+        let getLinkClicked = false;
+        for (let i = 0; i < 15; i++) {
+            getLinkClicked = await page.evaluate(() => {
+                const elements = Array.from(document.querySelectorAll('button, div, span, a'));
+                const target = elements.find(el => {
+                    if (el.offsetWidth === 0 || el.offsetHeight === 0) return false;
+                    const text = (el.textContent || '').trim();
+                    return text === 'Get Link' || text === 'Free Access';
+                });
+                if (target) {
+                    target.click();
+                    return true;
+                }
+                return false;
+            });
             
-            if (consentBtns.length > 0) {
-                console.log('🛡️ 发现隐私弹窗，点击 [CONFIRM] 以清除障碍...');
-                await page.evaluate(el => el.click(), consentBtns[0]);
-                await new Promise(r => setTimeout(r, 2000));
+            if (getLinkClicked) {
+                console.log('🖱️ 点击获取链接按钮，准备进入广告循环...');
+                break;
             }
-        } catch (e) {
-            console.log('✅ 未检测到隐私弹窗拦截。');
+            await new Promise(r => setTimeout(r, 1000));
         }
 
-        // ── 继续寻找 Get Link 按钮 ──
-        console.log('⏳ 寻找 [Get Link / Free Access] 按钮...');
-        const getLinkXPath = "//button[contains(., 'Get Link')] | //span[contains(., 'Get Link')] | //div[contains(@class, 'linkvertise-btn')]";
-        try {
-            await page.waitForSelector(`::-p-xpath(${getLinkXPath})`, { visible: true, timeout: 15000 });
-            const getLinkBtns = await page.$$(`::-p-xpath(${getLinkXPath})`);
-            console.log('🖱️ 点击获取链接按钮，进入广告循环...');
-            await page.evaluate(el => el.click(), getLinkBtns[0]);
-        } catch (e) {
-            console.log('⚠️ 未找到显式的 Get Link 按钮，尝试直接寻找广告 Skip Ad...');
+        if (!getLinkClicked) {
+            console.log('⚠️ 未找到显式的 Get Link 按钮，尝试直接扫描 Skip Ad 按钮...');
         }
 
         // ── 第三阶段：循环处理 3 个广告 ──
@@ -140,22 +155,31 @@ puppeteer.use(StealthPlugin());
             const startTime = Date.now();
             
             while (Date.now() - startTime < 30000) {
-                try {
-                    const skipXPath = "//span[contains(@class, 'lv-chip__text') and contains(., 'Skip Ad')]";
-                    const skipBtns = await page.$$(`::-p-xpath(${skipXPath})`);
-                    if (skipBtns.length > 0) {
-                        await page.evaluate(el => el.click(), skipBtns[0]);
-                        console.log(`✅ 第 ${i} 个广告 [Skip Ad] 点击成功！`);
-                        skipClicked = true;
-                        await new Promise(r => setTimeout(r, 3000)); 
-                        break; 
+                skipClicked = await page.evaluate(() => {
+                    const elements = Array.from(document.querySelectorAll('span, div, button'));
+                    const target = elements.find(el => {
+                        if (el.offsetWidth === 0 || el.offsetHeight === 0) return false;
+                        const text = (el.textContent || '').trim();
+                        // 兼容多种跳过提示
+                        return text.includes('Skip Ad') || text.includes('Skip ad') || text === 'Skip';
+                    });
+                    if (target) {
+                        target.click();
+                        return true;
                     }
-                } catch (err) {}
+                    return false;
+                });
+                
+                if (skipClicked) {
+                    console.log(`✅ 第 ${i} 个广告 [Skip Ad] 点击成功！`);
+                    await new Promise(r => setTimeout(r, 4000)); 
+                    break; 
+                }
                 await new Promise(r => setTimeout(r, 1000)); 
             }
             
             if (!skipClicked) {
-                console.log(`⚠️ 第 ${i} 个广告未找到 Skip Ad 按钮，可能提前结束或卡在验证码。`);
+                console.log(`⚠️ 第 ${i} 个广告未找到 Skip Ad 按钮，可能提前结束或卡在了验证码。`);
                 break;
             }
         }
@@ -163,25 +187,25 @@ puppeteer.use(StealthPlugin());
         // ── 第四阶段：等待最终回跳 ──
         console.log('\n⏳ 广告处理完毕，等待重定向回 Witchly...');
         try {
-            // 使用更健壮的 JS 原生跳转监听
-            await page.waitForFunction(() => window.location.href.includes('witchly'), { timeout: 40000 });
+            // 使用原生的 JS 判断代替 Puppeteer 的等待，防挂死
+            await page.waitForFunction(() => window.location.href.includes('witchly.host'), { timeout: 40000 });
             console.log('🎉 成功绕过 Linkvertise，签到流程完美闭环！');
             await page.screenshot({ path: 'success.png', fullPage: true });
         } catch (e) {
-            // 如果超时，再检查一次是不是 Linkvertise 标签页把自己关了，Witchly 在另外一个标签页
+            // 兜底方案：如果页面没跳，检查一下是不是 Witchly 的旧标签页被激活了
             const allPages = await browser.pages();
             let safeLanded = false;
             for (const p of allPages) {
-                if (p.url().includes('witchly')) {
+                if (p.url().includes('witchly.host')) {
                     safeLanded = true;
                     await p.bringToFront();
-                    console.log('🎉 发现 Witchly 标签页存活，成功返回！');
+                    console.log('🎉 发现 Witchly 主标签页存活，签到流程似乎已完成！');
                     await p.screenshot({ path: 'success.png', fullPage: true });
                     break;
                 }
             }
             if (!safeLanded) {
-                throw new Error(`回跳等待失败或超时，可能被终极验证码拦截。`);
+                throw new Error(`回跳等待失败或超时，可能被终极人机验证拦截。`);
             }
         }
 
