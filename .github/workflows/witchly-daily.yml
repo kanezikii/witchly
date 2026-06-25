@@ -1,9 +1,9 @@
-name: Witchly Daily Claim (Browser Mode)
+name: Witchly Daily Claim (Xray Proxy & Linkvertise Bypass)
 
 on:
   schedule:
-    - cron: '10 0 * * *'   # 每天 UTC 00:10（北京时间 08:10）
-  workflow_dispatch:         # 支持手动触发
+    - cron: '10 0 * * *'
+  workflow_dispatch:
 
 jobs:
   claim:
@@ -13,7 +13,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 1. 设置 Node.js 环境 ─────────────────────────────────────────
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -22,37 +21,34 @@ jobs:
       - name: Install Browser Dependencies
         run: npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
 
-      # ── 2. 安装并启动 gost 代理 ───────────────────────────────────────
-      - name: Install and Start gost
+      # ── 核心变更：安装并启动 Xray 核心加载家宽节点 ──
+      - name: Install and Run Xray Proxy
         env:
-          PROXY_NODE: ${{ secrets.WITCHLY_PROXY_NODE }}
+          XRAY_CONFIG: ${{ secrets.XRAY_CONFIG_JSON }}
         run: |
-          if [ -n "$PROXY_NODE" ]; then
-            GOST_VER="3.0.0-rc10"
-            ARCH="amd64"
-            curl -sSL "https://github.com/go-gost/gost/releases/download/v${GOST_VER}/gost_${GOST_VER}_linux_${ARCH}.tar.gz" -o /tmp/gost.tar.gz
-            tar -xzf /tmp/gost.tar.gz -C /tmp
-            chmod +x /tmp/gost
-            sudo mv /tmp/gost /usr/local/bin/gost
-            echo "[proxy] starting gost -> socks5://${PROXY_NODE}"
-            # 后台运行 gost，映射到本地 18080 端口
-            gost -L "http://:18080" -F "socks5://${PROXY_NODE}" &
-            sleep 2
-          else
-            echo "PROXY_NODE not set, will use direct connection."
+          if [ -z "$XRAY_CONFIG" ]; then
+            echo "❌ 未找到 XRAY_CONFIG_JSON 环境变量，代理启动失败！"
+            exit 1
           fi
+          echo "🚀 正在下载并配置 Xray 核心..."
+          curl -sSL -o xray.zip https://github.com/XTLS/Xray-core/releases/download/v1.8.4/Xray-linux-64.zip
+          unzip -q xray.zip -d xray-bin
+          chmod +x xray-bin/xray
+          
+          # 将 Secret 中的 JSON 写入配置文件
+          echo "$XRAY_CONFIG" > config.json
+          
+          echo "🌐 启动 Xray 代理 (映射至本地 10808 端口)..."
+          ./xray-bin/xray run -c config.json &
+          sleep 3 # 等待代理内核启动完毕
 
-      # ── 3. 执行无头浏览器签到脚本 ──────────────────────────────────────
       - name: Run daily claim (Puppeteer)
         id: claim
         env:
           DAILY_COOKIE: ${{ secrets.DAILY_COOKIE }}
-          DAILY_URL: ${{ secrets.DAILY_URL }}
-          PROXY_NODE: ${{ secrets.WITCHLY_PROXY_NODE }}
         run: |
           set +e
-          # 运行 Node.js 脚本，并将输出捕获
-          OUTPUT=$(node claim_browser.js 2>&1)
+          OUTPUT=$(node auto_claim.js 2>&1)
           EXIT_CODE=$?
           
           echo "output<<EOF" >> "$GITHUB_OUTPUT"
@@ -63,25 +59,20 @@ jobs:
           echo "$OUTPUT"
           exit $EXIT_CODE
 
-      # ── TG 通知：成功 ──────────────────────────────────────────────
       - name: Notify Telegram (success)
         if: success()
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
           CLAIM_OUTPUT: ${{ steps.claim.outputs.output }}
-          RUN_URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           NOW=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
-          MESSAGE=$(printf '✅ *Witchly 浏览器签到成功*\n\n📅 时间：%s CST\n📋 输出：\n```\n%s\n```\n🔗 [查看本次运行](%s)' \
-            "$NOW" "$CLAIM_OUTPUT" "$RUN_URL")
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d disable_web_page_preview="true" \
-            --data-urlencode "text=${MESSAGE}"
+            --data-urlencode "text=✅ *Witchly 签到成功* ($NOW)%0A\`\`\`%0A${CLAIM_OUTPUT:0:1000}%0A\`\`\`"
 
-      # ── TG 通知：失败 ───────────────────────────────────────────────
       - name: Notify Telegram (failure)
         if: failure()
         env:
@@ -89,13 +80,10 @@ jobs:
           TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
           CLAIM_OUTPUT: ${{ steps.claim.outputs.output }}
           EXIT_CODE:    ${{ steps.claim.outputs.exit_code }}
-          RUN_URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           NOW=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
-          MESSAGE=$(printf '❌ *Witchly 浏览器签到失败*\n\n📅 时间：%s CST\n💥 退出码：%s\n📋 输出：\n```\n%s\n```\n🔗 [查看完整日志](%s)' \
-            "$NOW" "$EXIT_CODE" "$CLAIM_OUTPUT" "$RUN_URL")
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d disable_web_page_preview="true" \
-            --data-urlencode "text=${MESSAGE}"
+            --data-urlencode "text=❌ *Witchly 签到失败* ($NOW) - 退出码: $EXIT_CODE%0A\`\`\`%0A${CLAIM_OUTPUT:0:1000}%0A\`\`\`"
