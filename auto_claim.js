@@ -28,6 +28,7 @@ puppeteer.use(StealthPlugin());
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 800 });
 
+        // ── 拦截垃圾广告弹窗 ──
         browser.on('targetcreated', async (target) => {
             if (target.type() === 'page') {
                 const newPage = await target.page();
@@ -39,6 +40,7 @@ puppeteer.use(StealthPlugin());
             }
         });
 
+        // ── 注入 Cookie ──
         const cookiePairs = COOKIE_STRING.split(';').map(c => c.trim()).filter(c => c);
         const cookiesToSet = cookiePairs.filter(c => c.includes('=')).map(cookie => {
             const [name, ...rest] = cookie.split('=');
@@ -46,6 +48,7 @@ puppeteer.use(StealthPlugin());
         });
         await page.setCookie(...cookiesToSet);
 
+        // ── 第一阶段：Witchly 面板操作 ──
         console.log(`🌐 访问 Witchly 面板...`);
         await page.goto(DASHBOARD_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
         
@@ -75,6 +78,7 @@ puppeteer.use(StealthPlugin());
             page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 })
         ]);
 
+        // ── 第二阶段：Linkvertise 操作 ──
         const currentUrl = page.url();
         console.log(`📍 成功跳转至: ${currentUrl}`);
         
@@ -82,9 +86,29 @@ puppeteer.use(StealthPlugin());
             throw new Error('未能成功跳转到 Linkvertise，流程中断。');
         }
 
-        console.log('⏳ 寻找 [Get Link / Free Access] 按钮...');
+        console.log('⏳ 给予 Linkvertise 页面加载缓冲时间...');
         await new Promise(r => setTimeout(r, 5000)); 
-        
+
+        // ── 核心新增：清除隐私/Cookie 弹窗障碍 ──
+        console.log('🔍 检查是否有隐私/Cookie 同意弹窗...');
+        try {
+            // 寻找包含 CONFIRM, ACCEPT 或 AGREE 的按钮
+            const consentXPath = "//button[contains(translate(., 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 'CONFIRM') or contains(translate(., 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 'ACCEPT')]";
+            await page.waitForSelector(`::-p-xpath(${consentXPath})`, { visible: true, timeout: 5000 });
+            const consentBtns = await page.$$(`::-p-xpath(${consentXPath})`);
+            
+            if (consentBtns.length > 0) {
+                console.log('🛡️ 发现隐私弹窗，点击 [CONFIRM] 以清除障碍...');
+                await page.evaluate(el => el.click(), consentBtns[0]);
+                // 给弹窗关闭动画一点时间
+                await new Promise(r => setTimeout(r, 2000));
+            }
+        } catch (e) {
+            console.log('✅ 未检测到隐私弹窗拦截，继续正常流程。');
+        }
+
+        // ── 继续寻找 Get Link 按钮 ──
+        console.log('⏳ 寻找 [Get Link / Free Access] 按钮...');
         const getLinkXPath = "//button[contains(., 'Get Link')] | //span[contains(., 'Get Link')] | //div[contains(@class, 'linkvertise-btn')]";
         try {
             await page.waitForSelector(`::-p-xpath(${getLinkXPath})`, { visible: true, timeout: 15000 });
@@ -95,6 +119,7 @@ puppeteer.use(StealthPlugin());
             console.log('⚠️ 未找到显式的 Get Link 按钮，尝试直接寻找广告 Skip Ad...');
         }
 
+        // ── 第三阶段：循环处理 3 个广告 ──
         for (let i = 1; i <= 3; i++) {
             console.log(`\n⏳ 开始处理第 ${i} 个广告...`);
             let skipClicked = false;
@@ -116,11 +141,12 @@ puppeteer.use(StealthPlugin());
             }
             
             if (!skipClicked) {
-                console.log(`⚠️ 第 ${i} 个广告未找到 Skip Ad 按钮，可能卡在验证码。`);
+                console.log(`⚠️ 第 ${i} 个广告未找到 Skip Ad 按钮，可能卡在验证码或流程已结束。`);
                 break;
             }
         }
 
+        // ── 第四阶段：等待最终回跳 ──
         console.log('\n⏳ 广告处理完毕，等待重定向回 Witchly...');
         try {
             await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
@@ -131,7 +157,6 @@ puppeteer.use(StealthPlugin());
                 console.log('🎉 成功绕过 Linkvertise，签到流程完美闭环！');
                 await page.screenshot({ path: 'success.png', fullPage: true });
             } else {
-                // ── 核心修改：如果没跳回 Witchly，强制报错 ──
                 throw new Error(`回跳失败，当前停留在: ${finalUrl}`);
             }
         } catch (e) {
@@ -143,13 +168,12 @@ puppeteer.use(StealthPlugin());
         try {
             const pages = await browser.pages();
             if (pages.length > 0) {
-                // ── 核心修改：拍摄错误现场 ──
                 await pages[pages.length - 1].screenshot({ path: 'error.png', fullPage: true });
                 console.log('📸 已保存错误现场截图至 error.png');
             }
         } catch(e) {}
         
-        process.exit(1); // 强制让 GitHub Actions 标红
+        process.exit(1);
     } finally {
         await browser.close();
     }
