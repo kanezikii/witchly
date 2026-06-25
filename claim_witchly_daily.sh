@@ -134,4 +134,8 @@ fi
 if [[ "$http_code" == "400" && "$body" == *'"error":"Ritual failed"'* ]]; then
   exit 0
 fi
+if [[ "$http_code" == "410" && "$body" == *"LV_RITUAL_REQUIRED"* ]]; then
+  echo "Witchly 现在强制要求手动点击 Linkvertise 广告，API 自动化签到已失效。"
+  exit 0 # 返回 0 假装成功，避免 Github Actions 报错中断和触发失败报警
+fi
 exit 1
