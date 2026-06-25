@@ -51,7 +51,7 @@ puppeteer.use(StealthPlugin());
 
         // ── 第一阶段：Witchly 面板操作 ──
         console.log(`🌐 访问 Witchly 面板...`);
-        await page.goto(DASHBOARD_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto(DASHBOARD_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
         console.log('⏳ 寻找 [MANIFEST] 按钮...');
         // 使用 XPath 定位包含 MANIFEST 文本的黄色按钮
