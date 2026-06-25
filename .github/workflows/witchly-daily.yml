@@ -21,7 +21,6 @@ jobs:
       - name: Install Browser Dependencies
         run: npm install puppeteer puppeteer-extra puppeteer-extra-plugin-stealth
 
-      # ── 修复：将代理启动与爬虫运行合并到同一个 Step ──
       - name: Run Proxy and Puppeteer
         id: claim
         env:
@@ -40,37 +39,28 @@ jobs:
           echo "$XRAY_CONFIG" > config.json
 
           echo "🌐 启动 Xray 代理..."
-          # 将日志输出到 xray.log，并在后台运行
           ./xray-bin/xray run -c config.json > xray.log 2>&1 &
           XRAY_PID=$!
-          
-          # 给代理 3 秒钟的启动和握手时间
           sleep 3
 
-          # 检查 Xray 进程是否存活
           if ! kill -0 $XRAY_PID 2>/dev/null; then
-            echo "❌ Xray 代理启动失败！请检查 JSON 节点配置格式。日志如下："
+            echo "❌ Xray 代理启动失败！"
             cat xray.log
             exit 1
           fi
           echo "✅ Xray 代理已稳定运行 (PID: $XRAY_PID)"
 
-          # 运行自动签到脚本
-          echo "🤖 启动浏览器执行任务..."
-          
           echo "🔍 测试代理节点连通性..."
-          # 使用 socks5h 强制让代理解析 DNS，测试 10 秒超时
-          curl -s --socks5-hostname 127.0.0.1:10808 https://api.ipify.org?format=json --connect-timeout 10 || echo "⚠️ 警告: curl 测试代理超时或失败，节点可能无法使用！"
+          curl -s --socks5-hostname 127.0.0.1:10808 https://api.ipify.org?format=json --connect-timeout 10 || echo "⚠️ 警告: curl 测试代理超时或失败！"
           echo ""
 
+          echo "🤖 启动浏览器执行任务..."
           set +e
           OUTPUT=$(node auto_claim.js 2>&1)
           EXIT_CODE=$?
           
-          # 脚本执行完毕，清理并关闭 Xray 代理
           kill $XRAY_PID 2>/dev/null
 
-          # 写入 GitHub Output 供后续 TG 通知使用
           echo "output<<EOF" >> "$GITHUB_OUTPUT"
           echo "$OUTPUT"     >> "$GITHUB_OUTPUT"
           echo "EOF"         >> "$GITHUB_OUTPUT"
@@ -78,6 +68,15 @@ jobs:
           
           echo "$OUTPUT"
           exit $EXIT_CODE
+
+      # ── 新增：将截图上传到 GitHub Artifacts ──
+      - name: Upload Screenshots
+        if: always() # 无论成功失败都会上传
+        uses: actions/upload-artifact@v4
+        with:
+          name: witchly-screenshots
+          path: "*.png"
+          retention-days: 7
 
       - name: Notify Telegram (success)
         if: success()
@@ -93,6 +92,7 @@ jobs:
             -d disable_web_page_preview="true" \
             --data-urlencode "text=✅ *Witchly 签到成功* ($NOW)%0A\`\`\`%0A${CLAIM_OUTPUT:0:1000}%0A\`\`\`"
 
+      # ── 修改：失败时除了发文本，还把 error.png 作为照片发到 TG ──
       - name: Notify Telegram (failure)
         if: failure()
         env:
@@ -102,8 +102,18 @@ jobs:
           EXIT_CODE:    ${{ steps.claim.outputs.exit_code }}
         run: |
           NOW=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
+          
+          # 1. 发送报错文字
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TG_CHAT_ID}" \
             -d parse_mode="Markdown" \
             -d disable_web_page_preview="true" \
             --data-urlencode "text=❌ *Witchly 签到失败* ($NOW) - 退出码: $EXIT_CODE%0A\`\`\`%0A${CLAIM_OUTPUT:0:1000}%0A\`\`\`"
+            
+          # 2. 如果存在错误截图，发送照片
+          if [ -f "error.png" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendPhoto" \
+              -F chat_id="${TG_CHAT_ID}" \
+              -F photo="@error.png" \
+              -F caption="📸 失败时的页面现场截图 (大概率卡在了验证码)"
+          fi
