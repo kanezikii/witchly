@@ -57,6 +57,12 @@ jobs:
 
           # 运行自动签到脚本
           echo "🤖 启动浏览器执行任务..."
+          
+          echo "🔍 测试代理节点连通性..."
+          # 使用 socks5h 强制让代理解析 DNS，测试 10 秒超时
+          curl -s --socks5-hostname 127.0.0.1:10808 https://api.ipify.org?format=json --connect-timeout 10 || echo "⚠️ 警告: curl 测试代理超时或失败，节点可能无法使用！"
+          echo ""
+
           set +e
           OUTPUT=$(node auto_claim.js 2>&1)
           EXIT_CODE=$?
